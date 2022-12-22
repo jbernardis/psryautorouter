@@ -3,10 +3,18 @@ import wx.lib.newevent
 
 import json
 
+from fifo import Fifo
+
 from settings import Settings
 
+from triggers import Triggers
+from routerequest import RouteRequest
+from turnout import Turnout
 from signal import Signal
 from block import Block
+from overswitch import OverSwitch
+from train import Train
+from route import Route
 
 from listener import Listener
 from rrserver import RRServer
@@ -21,11 +29,16 @@ class MainFrame(wx.Frame):
 		self.sessionid = None
 		self.subscribed = False
 		self.settings = Settings()
-		self.scripts = {}
+
+		self.triggers = Triggers()
+
 		self.blocks = {}
 		self.turnouts = {}
 		self.signals = {}
 		self.routes = {}
+		self.osList = {}
+		self.trains = {}
+		self.OSQueue = {}
 		self.listener = None
 		self.rrServer = None
 
@@ -119,14 +132,24 @@ class MainFrame(wx.Frame):
 
 	def onDeliveryEvent(self, evt):
 		for cmd, parms in evt.data.items():
+			#  print("receipt: %s: %s" % (cmd, parms))
 			if cmd == "turnout":
 				for p in parms:
 					turnout = p["name"]
 					state = p["state"]
-					self.turnouts[turnout] = state
+					if turnout not in self.turnouts:
+						self.turnouts[turnout] = Turnout(self, turnout, state)
+					else:
+						self.turnouts[turnout].SetState(state)
+
+			elif cmd == "turnoutlock":
+				for p in parms:
+					toName = p["name"]
+					lock = int(p["state"])
+					if toName in self.turnouts:
+						self.turnouts[toName].Lock(lock != 0)
 
 			elif cmd == "block":
-				print("%s: %s" % (cmd, parms))
 				for p in parms:
 					block = p["name"]
 					state = p["state"]
@@ -155,8 +178,6 @@ class MainFrame(wx.Frame):
 					lock = int(p["state"])
 					if sigName in self.signals:
 						self.signals[sigName].Lock(lock != 0)
-					else:
-						print("Don't know signal '%s'" % sigName)
 
 			elif cmd == "routedef":
 				name = parms["name"]
@@ -164,23 +185,38 @@ class MainFrame(wx.Frame):
 				ends = parms["ends"]
 				signals = parms["signals"]
 				turnouts = parms["turnouts"]
-				print("%10.10s  %10.10s       %10.10s  %10.10s" % (ends[0], ends[1], signals[0], signals[1]))
+				if os not in self.osList:
+					self.osList[os] = OverSwitch(os)
+
+				rte = Route(self, name, os, ends, signals, turnouts)
+				self.routes[name] = rte
+				self.osList[os].AddRoute(rte)
 
 			elif cmd == "setroute":
+				print("setroute: %s: %s" % (cmd, parms))
 				for p in parms:
 					blknm = p["block"]
-					rte = p["route"]
-					try:
-						ends = p["ends"]
-					except KeyError:
-						ends = None
-					self.routes[blknm] = [rte, ends]
+					rtnm = p["route"]
+					if blknm not in self.osList:
+						self.osList[blknm] = OverSwitch(blknm)
+
+					self.osList[blknm].SetActiveRoute(rtnm)
 
 			elif cmd == "settrain":
 				for p in parms:
 					block = p["block"]
 					name = p["name"]
 					loco = p["loco"]
+
+					if name is None:
+						self.blocks[block].SetTrain(None, None)
+					else:
+						if name not in self.trains:
+							self.trains[name] = Train(self, name, loco)
+
+						self.trains[name].AddBlock(block)
+
+						self.blocks[block].SetTrain(name, loco)
 
 			elif cmd == "sessionID":
 				self.sessionid = int(parms)
@@ -191,20 +227,122 @@ class MainFrame(wx.Frame):
 				if cmd not in ["control", "relay", "handswitch", "siglever", "breaker"]:
 					print("************************ Unprocessed Message: %s: %s" % (cmd, parms))
 
-	def SignalAspectChange(self, sigName, nLock):
+	def SignalLockChange(self, sigName, nLock):
 		print("signal %s lock has changed %s" % (sigName, str(nLock)))
+		self.EvaluateQueuedRequests()
 
-	def SignalLockChange(self, sigName, nAspect):
+	def SignalAspectChange(self, sigName, nAspect):
 		print("signal %s aspect has changed %d" % (sigName, nAspect))
+		self.EvaluateQueuedRequests()
+
+	def TurnoutLockChange(self, toName, nLock):
+		print("turnout %s lock has changed %s" % (toName, str(nLock)))
+		self.EvaluateQueuedRequests()
+
+	def TurnoutStateChange(self, toName, nState):
+		print("turnout %s state has changed %s" % (toName, nState))
+		self.EvaluateQueuedRequests()
 
 	def BlockDirectionChange(self, blkName, nDirection):
 		print("block %s has changed direction: %s" % (blkName, nDirection))
+		self.EvaluateQueuedRequests()
 
 	def BlockStateChange(self, blkName, nState):
 		print("block %s has changed state: %d" % (blkName, nState))
+		self.EvaluateQueuedRequests()
 
 	def BlockClearChange(self, blkName, nClear):
 		print("block %s has changed clear: %s" % (blkName, str(nClear)))
+		self.EvaluateQueuedRequests()
+
+	def BlockTrainChange(self, blkName, oldTrain, oldLoco, newTrain, newLoco):
+		if oldTrain is not None:
+			try:
+				if self.trains[oldTrain].DelBlock(blkName) == 0:
+					del(self.trains[oldTrain])
+			except KeyError:
+				pass
+
+	def TrainAddBlock(self, train, block):
+		print("train %s had moved into block %s" % (train, block))
+		routeRequest = self.CheckTrainInBlock(train, block)
+		if routeRequest is None:
+			print("we have nothing for this train in this block")
+			return
+
+		if self.EvaluateRouteRequest(routeRequest):
+			self.SetupRoute(routeRequest)
+		else:
+			self.EnqueueRouteRequest(routeRequest)
+
+	def CheckTrainInBlock(self, train, block):
+		rtName = self.triggers.GetRoute(train, block)
+		if rtName is None:
+			return None
+
+		return RouteRequest(train, self.routes[rtName], block)
+
+	def EvaluateRouteRequest(self, rteRq):
+		rname = rteRq.GetName()
+		blkName = rteRq.GetEntryBlock()
+		print("evaluate route %s" % rname)
+		rte = self.routes[rname]
+		os = self.osList[rte.GetOS()]
+		activeRte = os.GetActiveRoute()
+		tolock = []
+		siglock = []
+		if activeRte is None or activeRte.GetName() != rname:
+			for t in rte.GetTurnouts():
+				toname, state = t.split(":")
+				if self.turnouts[toname].IsLocked() and self.turnouts[toname].GetState() != state:
+					#  turnout is locked AND we need to change it
+					tolock.append(toname)
+		#  else we are already on this route - no turnout evauation needed
+
+		sigNm = rte.GetSignalForEnd(blkName)
+		if sigNm is not None:
+			if self.signals[sigNm].IsLocked():
+				siglock.append(sigNm)
+
+		if len(tolock) + len(siglock) == 0:
+			print("eval true")
+			return True  # OK to proceed with this route
+		else:
+			#  TODO - do something with the tolock and siglock arrays
+			print("Eval false %s %s" % (str(tolock), str(siglock)))
+			return False  # this route is unavailable right now
+
+	def SetupRoute(self, rteRq):
+		rname = rteRq.GetName()
+		blkName = rteRq.GetEntryBlock()
+		print("set up route %s" % rname)
+		rte = self.routes[rname]
+		for t in rte.GetTurnouts():
+			toname, state = t.split(":")
+			self.Request({"turnout": {"name": toname, "status": state}})
+
+		sigNm = rte.GetSignalForEnd(blkName)
+		if sigNm is not None:
+			self.Request({"signal": {"name": sigNm, "aspect": -1}})
+
+	def EnqueueRouteRequest(self, rteRq):
+		osNm = rteRq.GetOS()
+		if osNm not in self.OSQueue:
+			self.OSQueue[osNm] = Fifo()
+
+		self.OSQueue[osNm].Append(rteRq)
+
+	def EvaluateQueuedRequests(self):
+		print("evaluating queued requests")
+		for osNm in self.OSQueue:
+			print("OS: %s" % osNm)
+			req = self.OSQueue[osNm].Peek()
+			if req is not None:
+				print("Request for block %s" % req.GetName())
+				if self.EvaluateRouteRequest(req):
+					print("OK to proceed")
+					self.OSQueue[osNm].Pop()
+					self.SetupRoute(req)
 
 	def raiseDisconnectEvent(self): # thread context
 		evt = DisconnectEvent()

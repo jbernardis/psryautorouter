@@ -5,6 +5,8 @@ class Block:
 		self.state = state
 		self.direction = direction
 		self.clear = clear
+		self.train = None
+		self.loco = None
 
 	def SetState(self, state):
 		if state == self.state:
@@ -26,6 +28,16 @@ class Block:
 
 		self.clear = clear
 		self.parent.BlockClearChange(self.name, self.clear)
+
+	def SetTrain(self, train, loco):
+		if train == self.train and loco == self.loco:
+			return
+
+		oldTrain = self.train
+		oldLoco = self.loco
+		self.train = train
+		self.loco = loco
+		self.parent.BlockTrainChange(self.name, oldTrain, oldLoco, self.train, self.loco)
 
 	def GetName(self):
 		return self.name
