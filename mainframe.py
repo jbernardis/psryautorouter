@@ -115,11 +115,14 @@ class MainFrame(wx.Frame):
 	def OnRefresh(self, _):
 		if self.sessionid is not None:
 			self.rrServer.SendRequest({"refresh": {"SID": self.sessionid}})
-			self.requestRoutes()
 
 	def requestRoutes(self):
 		if self.sessionid is not None:
 			self.rrServer.SendRequest({"refresh": {"SID": self.sessionid, "type": "routes"}})
+
+	def requestTrains(self):
+		if self.sessionid is not None:
+			self.rrServer.SendRequest({"refresh": {"SID": self.sessionid, "type": "trains"}})
 
 	def raiseDeliveryEvent(self, data):  # thread context
 		try:
@@ -132,7 +135,7 @@ class MainFrame(wx.Frame):
 
 	def onDeliveryEvent(self, evt):
 		for cmd, parms in evt.data.items():
-			#  print("receipt: %s: %s" % (cmd, parms))
+			# print("receipt: %s: %s" % (cmd, parms))
 			if cmd == "turnout":
 				for p in parms:
 					turnout = p["name"]
@@ -221,7 +224,12 @@ class MainFrame(wx.Frame):
 			elif cmd == "sessionID":
 				self.sessionid = int(parms)
 				self.ShowTitle()
-				self.requestRoutes()
+
+			elif cmd == "end":
+				if parms["type"] == "layout":
+					self.requestRoutes()
+				elif parms["type"] == "routes":
+					self.requestTrains()
 
 			else:
 				if cmd not in ["control", "relay", "handswitch", "siglever", "breaker"]:
