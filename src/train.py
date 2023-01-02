@@ -11,14 +11,18 @@ class Train:
 
 		self.blocks.append(block)
 		self.parent.TrainAddBlock(self.name, block)
-
+		
 	def GetBlocks(self):
 		return self.blocks
 
-	def DelBlock(self, blkName):
-		if blkName in self.blocks:
-			self.blocks.remove(blkName)
+	def DelBlock(self, block):
+		if block in self.blocks:
+			self.blocks.remove(block)
+			self.parent.TrainRemoveBlock(self.name, block, self.blocks)
 		else:
-			print("block %s not found for train %s" % (blkName, self.name))
+			print("block %s not found for train %s" % (block, self.name))
+			
+		if len(self.blocks) > 0:
+			self.parent.TrainTailInBlock(self.name, self.blocks[0])
 
 		return len(self.blocks)

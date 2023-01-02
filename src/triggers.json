@@ -1,15 +1,15 @@
 {
   "HEX": {
-    "H23": "DRtH23D21",
-    "D21": "DRtD21S20",
-    "S20": "SRtS20H20",
-    "H20": "SRtH20H40"
+    "H23": {"route": "DRtH23D21", "trigger": "F"},
+    "D21": {"route": "DRtD21S20", "trigger": "F"},
+    "S20": {"route": "SRtS20H20", "trigger": "F"},
+    "H20": {"route": "SRtH20H40", "trigger": "F"}
   },
 
   "HWX": {
-    "S10": "DRtD11S10",
-    "D11": "DRtH13D11",
-    "H13": "HRtH13H31",
-    "H31": "HRtH30H31"
+    "S10": {"route": "DRtD11S10", "trigger": "F"},
+    "D11": {"route": "DRtH13D11", "trigger": "F"},
+    "H13": {"route": "HRtH13H31", "trigger": "F"},
+    "H31": {"route": "HRtH30H31", "trigger": "F"}
   }
 }

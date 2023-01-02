@@ -9,6 +9,7 @@ from settings import Settings
 
 from triggers import Triggers
 from routerequest import RouteRequest
+from requestqueue import RequestQueue
 from turnout import Turnout
 from signal import Signal
 from block import Block
@@ -39,6 +40,7 @@ class MainFrame(wx.Frame):
 		self.osList = {}
 		self.trains = {}
 		self.OSQueue = {}
+		self.ReqQueue= RequestQueue(self)
 		self.listener = None
 		self.rrServer = None
 
@@ -87,7 +89,7 @@ class MainFrame(wx.Frame):
 		self.rrServer = RRServer()
 		self.rrServer.SetServerAddress(self.settings.ipaddr, self.settings.serverport)
 
-		print("finished initialize")
+		print("finished initialize", flush = True)
 
 	def OnSubscribe(self, _):
 		if self.subscribed:
@@ -156,14 +158,31 @@ class MainFrame(wx.Frame):
 				for p in parms:
 					block = p["name"]
 					state = p["state"]
-					direction = p["dir"]
-					clear = p["clear"]
+					print("block: %s %s" % (block, str(state)), flush = True)
 					if block not in self.blocks:
-						self.blocks[block] = Block(self, block, state, direction, clear != 0)
+						self.blocks[block] = Block(self, block, state, 'E', False)
 					else:
 						b = self.blocks[block]
 						b.SetState(state)
+
+			elif cmd == "blockdir":
+				for p in parms:
+					block = p["block"]
+					direction = p["dir"]
+					if block not in self.blocks:
+						self.blocks[block] = Block(self, block, 0, direction, False)
+					else:
+						b = self.blocks[block]
 						b.SetDirection(direction)
+
+			elif cmd == "blockclear":
+				for p in parms:
+					block = p["block"]
+					clear = p["clear"]
+					if block not in self.blocks:
+						self.blocks[block] = Block(self, block, 0, 'E', clear != 0)
+					else:
+						b = self.blocks[block]
 						b.SetClear(clear)
 
 			elif cmd == "signal":
@@ -196,7 +215,7 @@ class MainFrame(wx.Frame):
 				self.osList[os].AddRoute(rte)
 
 			elif cmd == "setroute":
-				print("setroute: %s: %s" % (cmd, parms))
+				print("setroute: %s: %s" % (cmd, parms), flush = True)
 				for p in parms:
 					blknm = p["block"]
 					rtnm = p["route"]
@@ -236,31 +255,32 @@ class MainFrame(wx.Frame):
 					print("************************ Unprocessed Message: %s: %s" % (cmd, parms))
 
 	def SignalLockChange(self, sigName, nLock):
-		print("signal %s lock has changed %s" % (sigName, str(nLock)))
+		print("signal %s lock has changed %s" % (sigName, str(nLock)), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def SignalAspectChange(self, sigName, nAspect):
-		print("signal %s aspect has changed %d" % (sigName, nAspect))
+		print("signal %s aspect has changed %d" % (sigName, nAspect), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def TurnoutLockChange(self, toName, nLock):
-		print("turnout %s lock has changed %s" % (toName, str(nLock)))
+		print("turnout %s lock has changed %s" % (toName, str(nLock)), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def TurnoutStateChange(self, toName, nState):
-		print("turnout %s state has changed %s" % (toName, nState))
+		print("turnout %s state has changed %s" % (toName, nState), flush = True)
 		self.EvaluateQueuedRequests()
+		self.ReqQueue.Resume(toName)
 
 	def BlockDirectionChange(self, blkName, nDirection):
-		print("block %s has changed direction: %s" % (blkName, nDirection))
+		print("block %s has changed direction: %s" % (blkName, nDirection), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def BlockStateChange(self, blkName, nState):
-		print("block %s has changed state: %d" % (blkName, nState))
+		print("block %s has changed state: %d" % (blkName, nState), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def BlockClearChange(self, blkName, nClear):
-		print("block %s has changed clear: %s" % (blkName, str(nClear)))
+		print("block %s has changed clear: %s" % (blkName, str(nClear)), flush = True)
 		self.EvaluateQueuedRequests()
 
 	def BlockTrainChange(self, blkName, oldTrain, oldLoco, newTrain, newLoco):
@@ -272,16 +292,31 @@ class MainFrame(wx.Frame):
 				pass
 
 	def TrainAddBlock(self, train, block):
-		print("train %s had moved into block %s" % (train, block))
+		print("=================train %s has moved into block %s" % (train, block), flush = True)
 		routeRequest = self.CheckTrainInBlock(train, block)
 		if routeRequest is None:
-			print("we have nothing for this train in this block")
+			print("we have nothing for this train in this block", flush = True)
 			return
 
 		if self.EvaluateRouteRequest(routeRequest):
 			self.SetupRoute(routeRequest)
 		else:
 			self.EnqueueRouteRequest(routeRequest)
+			
+	def TrainTailInBlock(self, train, block):
+		print("================= train %s tail in block %s" % (train, block), flush = True)
+
+	def TrainRemoveBlock(self, train, block, blocks):
+		print("================= train %s has left block %s and is now in %s" % (train, block, ",".join(blocks)), flush = True)
+  # routeRequest = self.CheckTrainInBlock(train, block)
+  # if routeRequest is None:
+  # 	print("we have nothing for this train in this block")
+  # 	return
+  #
+  # if self.EvaluateRouteRequest(routeRequest):
+  # 	self.SetupRoute(routeRequest)
+  # else:
+  # 	self.EnqueueRouteRequest(routeRequest)
 
 	def CheckTrainInBlock(self, train, block):
 		rtName = self.triggers.GetRoute(train, block)
@@ -293,7 +328,7 @@ class MainFrame(wx.Frame):
 	def EvaluateRouteRequest(self, rteRq):
 		rname = rteRq.GetName()
 		blkName = rteRq.GetEntryBlock()
-		print("evaluate route %s" % rname)
+		print("evaluate route %s" % rname, flush = True)
 		rte = self.routes[rname]
 		os = self.osList[rte.GetOS()]
 		activeRte = os.GetActiveRoute()
@@ -313,25 +348,26 @@ class MainFrame(wx.Frame):
 				siglock.append(sigNm)
 
 		if len(tolock) + len(siglock) == 0:
-			print("eval true")
+			print("eval true", flush = True)
 			return True  # OK to proceed with this route
 		else:
 			#  TODO - do something with the tolock and siglock arrays
-			print("Eval false %s %s" % (str(tolock), str(siglock)))
+			print("Eval false %s %s" % (str(tolock), str(siglock)), flush = True)
 			return False  # this route is unavailable right now
 
 	def SetupRoute(self, rteRq):
 		rname = rteRq.GetName()
 		blkName = rteRq.GetEntryBlock()
-		print("set up route %s" % rname)
+		print("set up route %s" % rname, flush = True)
 		rte = self.routes[rname]
 		for t in rte.GetTurnouts():
 			toname, state = t.split(":")
-			self.Request({"turnout": {"name": toname, "status": state}})
+			if self.turnouts[toname].GetState() != state:
+				self.ReqQueue.Append({"turnout": {"name": toname, "status": state}})
 
 		sigNm = rte.GetSignalForEnd(blkName)
 		if sigNm is not None:
-			self.Request({"signal": {"name": sigNm, "aspect": -1}})
+			self.ReqQueue.Append({"signal": {"name": sigNm, "aspect": -1}})
 
 	def EnqueueRouteRequest(self, rteRq):
 		osNm = rteRq.GetOS()
@@ -341,16 +377,17 @@ class MainFrame(wx.Frame):
 		self.OSQueue[osNm].Append(rteRq)
 
 	def EvaluateQueuedRequests(self):
-		print("evaluating queued requests")
+		print("evaluating queued requests", flush = True)
 		for osNm in self.OSQueue:
-			print("OS: %s" % osNm)
+			print("OS: %s" % osNm, flush = True)
 			req = self.OSQueue[osNm].Peek()
 			if req is not None:
-				print("Request for block %s" % req.GetName())
+				print("Request for block %s" % req.GetName(), flush = True)
 				if self.EvaluateRouteRequest(req):
-					print("OK to proceed")
+					print("OK to proceed", flush = True)
 					self.OSQueue[osNm].Pop()
 					self.SetupRoute(req)
+		print("end of queued requests", flush = True)
 
 	def raiseDisconnectEvent(self): # thread context
 		evt = DisconnectEvent()
@@ -358,7 +395,7 @@ class MainFrame(wx.Frame):
 
 	def Request(self, req):
 		if self.subscribed:
-			print("Outgoing request: %s" % json.dumps(req))
+			print("Outgoing request: %s" % json.dumps(req), flush = True)
 			self.rrServer.SendRequest(req)
 
 	def onDisconnectEvent(self, _):
