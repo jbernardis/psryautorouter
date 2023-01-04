@@ -7,7 +7,7 @@ from fifo import Fifo
 
 from settings import Settings
 
-from triggers import Triggers
+from triggers import Triggers, TriggerPointFront, TriggerPointRear
 from routerequest import RouteRequest
 from requestqueue import RequestQueue
 from turnout import Turnout
@@ -293,11 +293,10 @@ class MainFrame(wx.Frame):
 
 	def TrainAddBlock(self, train, block):
 		print("=================train %s has moved into block %s" % (train, block), flush = True)
-		routeRequest = self.CheckTrainInBlock(train, block)
+		routeRequest = self.CheckTrainInBlock(train, block, TriggerPointFront)
 		if routeRequest is None:
-			print("we have nothing for this train in this block", flush = True)
 			return
-
+		
 		if self.EvaluateRouteRequest(routeRequest):
 			self.SetupRoute(routeRequest)
 		else:
@@ -305,24 +304,30 @@ class MainFrame(wx.Frame):
 			
 	def TrainTailInBlock(self, train, block):
 		print("================= train %s tail in block %s" % (train, block), flush = True)
+		routeRequest = self.CheckTrainInBlock(train, block, TriggerPointRear)
+		if routeRequest is None:
+			return
+		
+		if self.EvaluateRouteRequest(routeRequest):
+			self.SetupRoute(routeRequest)
+		else:
+			self.EnqueueRouteRequest(routeRequest)
 
 	def TrainRemoveBlock(self, train, block, blocks):
 		print("================= train %s has left block %s and is now in %s" % (train, block, ",".join(blocks)), flush = True)
-  # routeRequest = self.CheckTrainInBlock(train, block)
-  # if routeRequest is None:
-  # 	print("we have nothing for this train in this block")
-  # 	return
-  #
-  # if self.EvaluateRouteRequest(routeRequest):
-  # 	self.SetupRoute(routeRequest)
-  # else:
-  # 	self.EnqueueRouteRequest(routeRequest)
-
-	def CheckTrainInBlock(self, train, block):
+		pass
+ 
+	def CheckTrainInBlock(self, train, block, triggerPoint):
 		rtName = self.triggers.GetRoute(train, block)
 		if rtName is None:
+			print("train/block combination %s/%s not found" % (train, block), flush = True)
 			return None
 
+		blockTriggerPoint = self.triggers.GetTriggerPoint(train, block)
+		if blockTriggerPoint != triggerPoint:
+			print("trigger point mismatch, wanted %s, got %s" % (triggerPoint, blockTriggerPoint), flush=True)
+			return None
+		
 		return RouteRequest(train, self.routes[rtName], block)
 
 	def EvaluateRouteRequest(self, rteRq):
