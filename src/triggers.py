@@ -1,4 +1,5 @@
 import json
+import os
 import pprint
 
 TriggerPointFront = 'F'  # front of train
@@ -7,7 +8,7 @@ TriggerPointRear = 'R'  # rear of train
 
 class Triggers:
 	def __init__(self):
-		with open("triggers.json", "r") as jfp:
+		with open(os.path.join(os.getcwd(), "data", "arscripts.json"), "r") as jfp:
 			self.triggerTable = json.load(jfp)			
 		pprint.pprint(self.triggerTable)
 
